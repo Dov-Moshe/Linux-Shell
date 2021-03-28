@@ -4,8 +4,10 @@
 #include <malloc.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <wait.h>
 
-int getCommand();
+
+int getCommand(int* isInBackground);
 int isBuiltIn(char* command);
 void handleBuiltIn(char* command[], size_t numOfArg);
 void freeCommand();
@@ -16,35 +18,32 @@ void handleCommandCd(char* command[], size_t numOfArg);
 void handleCommandExit(char* command[], size_t numOfArg);
 
 void handleEcho(char* command[100], size_t numOfArg);
+void updateJobs();
 
 int stop = 0;
 char* listCommand[100];
 char previousPWD[PATH_MAX];
 char currentPWD[PATH_MAX];
 
+
+// data for commands 'jobs' and 'history'
+// in the first byte there is a status ( 0==RUNNING, 1==DONE for child process), and in the next bytes the command
+char history[100][101];
+int processID[100];
+int numberOfCommands = 0;
+
 int main(int argc, char **argv) {
 
     //atexit(freeCommand);
 
-    //long max =
-    //printf("%ld\n", sizeof(previousPWD));
-
-    getcwd(previousPWD, sizeof(previousPWD));
-
     while (!stop) {
-        char *args[] = {"ls", "-r", "-t", "-l", NULL };
-        //int s = execvp("ls", args);
-        //printf("%d\n", s);
 
         printf("$ ");
         fflush(stdout);
         bzero(listCommand, 100);
 
-        //char * l = *list;
-
-
-        int numOfArg = getCommand();
-        //int s = execvp(listCommand[0], listCommand);
+        int isInBackground = 1;
+        int numOfArg = getCommand(&isInBackground);
 
         if (strcmp(listCommand[0], "echo")==0)
             handleEcho(listCommand, numOfArg);
@@ -55,47 +54,85 @@ int main(int argc, char **argv) {
 
         if (isBuiltIn(listCommand[0])) {
             handleBuiltIn(listCommand, numOfArg);
+            history[numberOfCommands][0] = '3';
         } else {
-            //execvp(listCommand[0],listCommand);
             pid_t pid;
-
-            if ((pid = fork())==0) {
+            pid = fork();
+            processID[numberOfCommands] = pid;
+            if (pid == 0) {
                 // the child process
-                int s = execvp(listCommand[0], listCommand);
-                if (s<0)
+                int execStatus = execvp(listCommand[0], listCommand);
+                if (execStatus < 0) {
                     printf("exec failed\n");
+                    exit(0);
+                }
             } else if (pid < 0) {
                 // if the command fork failed
                 printf("fork failed\n");
             } else {
                 // the father process
                 // check if it is foreground or background
-                usleep(100000);
+                if (isInBackground)
+                    waitpid(pid, NULL,0);
             }
         }
+        numberOfCommands++;
+
     }
 
     return 0;
 }
 
-int getCommand() {
+/**
+ *
+ * @param isInBackground
+ * @return number of argument
+ */
+
+int getCommand(int* isInBackground) {
 
     char command[100];
     // preparing to get a command
     char* commandSplit;
     // getting a command
     scanf(" %[^\n]s", command);
+
+    /******* for "jobs" and "history" *******/
+    // copy the command to history list and check if it is background or foreground
+    int len = strlen(command);
+    int j;
+    for (j = 0; j < len; j++){
+        // if '&' exist then the command will run as background
+        if (command[j] == '&'){
+            history[numberOfCommands][j] = '\0';
+            command[j-1] = '\0';
+            *isInBackground = 0;
+            break;
+        }
+        history[numberOfCommands][j+1] = command[j];
+    }
+    history[numberOfCommands][j+2] = '\0';
+    /***************************************/
+
+
     // split into words
     int i = 0;
     commandSplit = strtok(command, " ");
     while (commandSplit != NULL) {
         listCommand[i] = malloc(strlen((commandSplit+1)) * sizeof(char));
         strcpy(listCommand[i], commandSplit);
-        printf("%s\n", commandSplit);
         commandSplit = strtok(NULL, " ");
         i++;
     }
-    printf("%d\n",i);
+
+    /******* for "jobs" and "history" *******/
+    // to know if the command need to be in list jobs. 2 if not, and 0 otherwise
+    if (isBuiltIn(command))
+        history[numberOfCommands][0] = '2';
+    else
+        history[numberOfCommands][0] = '0';
+    /***************************************/
+
     return i;
 }
 
@@ -122,38 +159,61 @@ void handleBuiltIn(char* command[100], size_t numOfArg) {
 }
 
 void handleCommandJobs(char* command[100], size_t numOfArg) {
-    system("jobs -p");
+    updateJobs();
+    int i;
+    for (i = 0; i < numberOfCommands; i++){
+        if (history[i][0] == '0')
+            printf("%s\n", history[i]+1);
+    }
+    history[numberOfCommands][0] = '2';
 
+}
+void updateJobs(){
+    int i;
+    for (i = 0; i < numberOfCommands; i++) {
+        if (history[i][0] == '0') {
+            if (waitpid(processID[i], NULL, WNOHANG) !=0)
+                history[i][0] = '1';
+        }
+    }
 }
 
 void handleCommandHistory(char* command[100], size_t numOfArg) {
-    printf("%s\n", command[1]);
-
+    updateJobs();
+    int i;
+    for (i = 0; i < numberOfCommands; i++) {
+        if (history[i][0] == '0')
+            printf("%s RUNNING\n", history[i]+1);
+        else if (history[i][0] == '1' || history[i][0] == '3')
+            printf("%s DONE\n", history[i]+1);
+    }
+    printf("history RUNNING\n");
 }
 
 void handleCommandCd(char* command[100], size_t numOfArg) {
 
+    if (command[1] != NULL && strcmp(command[1], "-") != 0) {
+        getcwd(previousPWD, sizeof(previousPWD));
+        if (command[2] != NULL)
+            printf("Too many argument\n");
+        else if (command[1] == NULL || strcmp(command[1], "~")==0)
+            chdir(getenv("HOME"));
+        else
+            chdir(command[1]);
 
-
-    if (command[1] != NULL && strcmp(command[1], "-")==0) {
-        chdir(getenv(previousPWD));
-        return;
     }
-    getcwd(previousPWD, sizeof(previousPWD));
-    if (command[2] != NULL)
-        printf("Too many argument\n");
-    else if (command[1] == NULL || strcmp(command[1], "~")==0)
-        chdir(getenv("HOME"));
-    else if (strcmp(command[1], "..")==0)
-        chdir(command[1]);
-
+    else if (command[1] != NULL && strcmp(command[1], "-")==0) {
+        chdir(previousPWD);
+        strcpy(previousPWD, currentPWD);
+    }
     getcwd(currentPWD, sizeof(currentPWD));
 }
+
+
 
 void handleCommandExit(char* command[100], size_t numOfArg) {
     exit(0);
 }
-
 
 void freeCommand() {
     printf("hey\n");
@@ -163,34 +223,12 @@ void freeCommand() {
     }
 }
 
+
 void handleEcho(char* command[100], size_t numOfArg) {
     char* t;
-    for (int i = 1; i < numOfArg; ++i) {
+    int i;
+    for (i = 1; i < numOfArg; ++i) {
         t = strtok(command[i], "\"");
         strcpy(command[i], t);
     }
 }
-
-
-
-
-/*int getCommand(char listCommand[]) {
-
-    // preparing to get a command
-    char command[100];
-    bzero(command, 100);
-    char* commandSplit;
-    // getting a command
-    scanf("%[^\n]s", listCommand);
-    // split into words
-    int i = 0;
-    commandSplit = strtok(listCommand, " ");
-    while (commandSplit != NULL) {
-        //strcpy(listCommand[i], commandSplit);
-        printf("%s\n", commandSplit);
-        commandSplit = strtok(NULL, " ");
-        i++;
-    }
-    printf("%d\n",i);
-    return i;
-}*/
