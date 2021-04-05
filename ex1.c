@@ -1,3 +1,5 @@
+// Dov Moshe 205694441
+
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -10,12 +12,11 @@
 int getCommand(int* isInBackground);
 int isBuiltIn(char* command);
 void handleBuiltIn(char* command[], size_t numOfArg);
-void freeCommand();
 
 void handleCommandJobs(char* command[], size_t numOfArg);
 void handleCommandHistory(char* command[], size_t numOfArg);
 void handleCommandCd(char* command[], size_t numOfArg);
-void handleCommandExit(char* command[], size_t numOfArg);
+void handleCommandExit();
 
 void handleEcho(char* command[100], size_t numOfArg);
 void updateJobs();
@@ -34,28 +35,30 @@ int numberOfCommands = 0;
 
 int main(int argc, char **argv) {
 
-    //atexit(freeCommand);
 
+    /****************************
+     Loop to run commands one after the other
+     ***************************/
     while (!stop) {
 
         printf("$ ");
         fflush(stdout);
         bzero(listCommand, 100);
 
-        int isInBackground = 1;
+        int isInBackground = 0;
         int numOfArg = getCommand(&isInBackground);
 
+        // If the command is 'echo' then it needed to remove the Apostrophes
         if (strcmp(listCommand[0], "echo")==0)
             handleEcho(listCommand, numOfArg);
 
-        /**********/
-        //stop = 1;
-        /**********/
-
+        // If the command is built-in
         if (isBuiltIn(listCommand[0])) {
             handleBuiltIn(listCommand, numOfArg);
+            // Marking the command as DONE
             history[numberOfCommands][0] = '3';
         } else {
+            // If the command is not built-in then creating a child process
             pid_t pid;
             pid = fork();
             processID[numberOfCommands] = pid;
@@ -72,7 +75,7 @@ int main(int argc, char **argv) {
             } else {
                 // the father process
                 // check if it is foreground or background
-                if (isInBackground)
+                if (!isInBackground)
                     waitpid(pid, NULL,0);
             }
         }
@@ -83,8 +86,9 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+
 /**
- *
+ * The function gets command by 'scanf' and checks if the command is in background or not.
  * @param isInBackground
  * @return number of argument
  */
@@ -106,7 +110,7 @@ int getCommand(int* isInBackground) {
         if (command[j] == '&'){
             history[numberOfCommands][j] = '\0';
             command[j-1] = '\0';
-            *isInBackground = 0;
+            *isInBackground = 1;
             break;
         }
         history[numberOfCommands][j+1] = command[j];
@@ -136,6 +140,12 @@ int getCommand(int* isInBackground) {
     return i;
 }
 
+
+/**
+ * checking if the command is built-in
+ * @param command
+ * @return boolean answer
+ */
 int isBuiltIn(char* command) {
     if (strcmp(command, "jobs") == 0 ||
     strcmp(command, "history") == 0 ||
@@ -145,6 +155,12 @@ int isBuiltIn(char* command) {
     return 0;
 }
 
+
+/**
+ * If the command is built-in then the function calls to the right function of the command
+ * @param command
+ * @param numOfArg
+ */
 void handleBuiltIn(char* command[100], size_t numOfArg) {
     if (strcmp(command[0], "jobs") == 0)
         handleCommandJobs(command, numOfArg);
@@ -153,12 +169,19 @@ void handleBuiltIn(char* command[100], size_t numOfArg) {
     } else if (strcmp(command[0], "cd") == 0) {
         handleCommandCd(command, numOfArg);
     } else {
-        handleCommandExit(command, numOfArg);
+        handleCommandExit();
     }
 
 }
 
+
+/**
+ * Function that handle with the command 'jobs'
+ * @param command
+ * @param numOfArg
+ */
 void handleCommandJobs(char* command[100], size_t numOfArg) {
+    // before printing the jobs it needed to check if there is jobs that done
     updateJobs();
     int i;
     for (i = 0; i < numberOfCommands; i++){
@@ -168,9 +191,17 @@ void handleCommandJobs(char* command[100], size_t numOfArg) {
     history[numberOfCommands][0] = '2';
 
 }
+
+
+/**
+ * Helper function that update the jobs that done
+ * @param command
+ * @param numOfArg
+ */
 void updateJobs(){
     int i;
     for (i = 0; i < numberOfCommands; i++) {
+        // checking only for commands that are not built-in
         if (history[i][0] == '0') {
             if (waitpid(processID[i], NULL, WNOHANG) !=0)
                 history[i][0] = '1';
@@ -178,10 +209,19 @@ void updateJobs(){
     }
 }
 
+
+/**
+ * Function that handle with the command 'history'
+ * @param command
+ * @param numOfArg
+ */
 void handleCommandHistory(char* command[100], size_t numOfArg) {
+
+    // before printing the history it needed to check if there is jobs that done
     updateJobs();
     int i;
     for (i = 0; i < numberOfCommands; i++) {
+        // if the status of jobs is 0 then the jobs is running else the jobs done
         if (history[i][0] == '0')
             printf("%s RUNNING\n", history[i]+1);
         else if (history[i][0] == '1' || history[i][0] == '3')
@@ -190,45 +230,89 @@ void handleCommandHistory(char* command[100], size_t numOfArg) {
     printf("history RUNNING\n");
 }
 
-void handleCommandCd(char* command[100], size_t numOfArg) {
 
-    if (command[1] != NULL && strcmp(command[1], "-") != 0) {
+/**
+ * Function that handle with the command 'cd'
+ * @param command
+ * @param numOfArg
+ */
+void handleCommandCd(char* command[100], size_t numOfArg) {
+    // if the command without '-' as argument
+    if (command[1] == NULL || strcmp(command[1], "-") != 0) {
+
+        // get the current path to be the previous path
         getcwd(previousPWD, sizeof(previousPWD));
         if (command[2] != NULL)
-            printf("Too many argument\n");
-        else if (command[1] == NULL || strcmp(command[1], "~")==0)
-            chdir(getenv("HOME"));
-        else
-            chdir(command[1]);
+            printf("Too many arguments\n");
+
+        // if there is no too many arguments
+        else if (command[1] == NULL || command[1][0] == '~') {
+            // if the command with '~' as argument
+            int status = chdir(getenv("HOME"));
+            if (status < 0)
+                printf("chdir failed\n");
+            // if there is continued to the command
+            if (command[1] != NULL && command[1][1] != '\0') {
+                if (command[1][1] != '/')
+                    printf("chdir failed\n");
+                else if (command[1][2] != '\0'){
+                    command[1][0] = '.';
+                    status = chdir(command[1]);
+                    if (status < 0) {
+                        chdir(previousPWD);
+                        printf("chdir failed\n");
+                        return;
+                    }
+                }
+            }
+        } else if (command[1][0] == '.') {
+            // if the command with '..' as argument
+            int status = chdir(command[1]);
+            if (status < 0)
+                printf("chdir failed\n");
+        } else {
+            int status = chdir(command[1]);
+            if (status < 0)
+                printf("chdir failed\n");
+        }
+
 
     }
-    else if (command[1] != NULL && strcmp(command[1], "-")==0) {
+
+        // if the command with '-' as argument
+    else if (command[1] != NULL && command[1][0] == '-') {
+        // go to the previous path
         chdir(previousPWD);
+        // switch the current path with previous path (before the changing happened)
         strcpy(previousPWD, currentPWD);
     }
+
+    // getting the current path
     getcwd(currentPWD, sizeof(currentPWD));
+
 }
 
 
-
-void handleCommandExit(char* command[100], size_t numOfArg) {
+/**
+ * Function that handle with the command 'exit'
+ */
+void handleCommandExit() {
     exit(0);
 }
 
-void freeCommand() {
-    printf("hey\n");
-    int i = 0;
-    while (listCommand[i] != NULL) {
-        free(listCommand[i]);
-    }
-}
 
-
+/**
+ * If the command is 'echo' then the function removes the Apostrophes
+ * @param command
+ * @param numOfArg
+ */
 void handleEcho(char* command[100], size_t numOfArg) {
     char* t;
     int i;
     for (i = 1; i < numOfArg; ++i) {
         t = strtok(command[i], "\"");
-        strcpy(command[i], t);
+        char temp[100];
+        strcpy(temp, t);
+        strcpy(command[i], temp);
     }
 }
