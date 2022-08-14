@@ -1,5 +1,3 @@
-// Dov Moshe 205694441
-
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
